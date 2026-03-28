@@ -365,7 +365,7 @@ export default function App() {
     boardCount[stack.owner] += stack.count;
   });
 
-  const cameraRef = useRef(camera);
+  const cameraRef = useRef({ x: 0, y: 0, zoom: 1 });
   useEffect(() => {
     cameraRef.current = camera;
   }, [camera]);
@@ -375,8 +375,8 @@ export default function App() {
       onPinch: ({ 
         origin: [ox, oy], 
         first, 
-        last, 
         active,
+        memo,
         offset: [d] 
       }) => {
         if (first) {
@@ -391,17 +391,14 @@ export default function App() {
         }
 
         if (!active || !memo) return;
-        
-        if (last) {
-          setIsPinching(false);
-          return;
-        }
 
         const canvas = canvasRef.current;
+        if (!canvas) return;
+        
         const rect = canvas.getBoundingClientRect();
         const cx = (ox - rect.left) * (canvas.width / rect.width);
         const cy = (oy - rect.top) * (canvas.height / rect.height);
-        const zoomRatio = d / camera.zoom;
+        const zoomRatio = d / memo.startZoom;
 
         cameraRef.current = {
           zoom: d,
@@ -410,7 +407,9 @@ export default function App() {
         };
         draw();
       },
-      onPinchEnd: () => setIsPinching(false),
+      onPinchEnd: () => {
+        setIsPinching(false);
+      }
     },
     {
       pinch: { 
@@ -487,6 +486,8 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const { x, y, zoom } = cameraRef.current;
+
     const width = canvas.width;
     const height = canvas.height;
 
@@ -495,15 +496,15 @@ export default function App() {
     ctx.fillRect(0, 0, width, height);
 
     ctx.save();
-    ctx.translate(width / 2 + camera.x, height / 2 + camera.y);
-    ctx.scale(camera.zoom, camera.zoom);
+    ctx.translate(width / 2 + x, height / 2 + y);
+    ctx.scale(zoom, zoom);
 
     const s = HEX_SIZE;
 
-    const left = (-width / 2 - camera.x) / camera.zoom;
-    const right = (width / 2 - camera.x) / camera.zoom;
-    const top = (-height / 2 - camera.y) / camera.zoom;
-    const bottom = (height / 2 - camera.y) / camera.zoom;
+    const left = (-width / 2 - x) / zoom;
+    const right = (width / 2 - x) / zoom;
+    const top = (-height / 2 - y) / zoom;
+    const bottom = (height / 2 - y) / zoom;
 
     const corners = [
       pixelToAxial(left, top, s),
@@ -527,7 +528,7 @@ export default function App() {
     maxR = Math.ceil(maxR) + 1;
 
     ctx.strokeStyle = '#334155'; // slate-700
-    ctx.lineWidth = 2 / camera.zoom;
+    ctx.lineWidth = 2 / zoom;
     ctx.lineJoin = 'round';
 
     // Draw all hexes as a single path for performance
@@ -566,7 +567,7 @@ export default function App() {
           ctx.fillStyle = '#334155'; // slate-700
           ctx.fill();
           ctx.strokeStyle = '#64748b'; // slate-500
-          ctx.lineWidth = 2 / camera.zoom;
+          ctx.lineWidth = 2 / zoom;
           ctx.stroke();
 
           if (castlePos.p1 && castlePos.p1.q === q && castlePos.p1.r === r) {
@@ -620,7 +621,7 @@ export default function App() {
 
         const neighbors = getNeighbors(q, r);
         ctx.strokeStyle = playerColor;
-        ctx.lineWidth = 2 / camera.zoom;
+        ctx.lineWidth = 2 / zoom;
         ctx.lineCap = 'round';
         
         for (let i = 0; i < 6; i++) {
@@ -663,7 +664,7 @@ export default function App() {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
         ctx.fill();
         ctx.strokeStyle = '#cbd5e1';
-        ctx.lineWidth = 3 / camera.zoom;
+        ctx.lineWidth = 3 / zoom;
         ctx.stroke();
       }
     }
