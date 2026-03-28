@@ -409,7 +409,8 @@ export default function App() {
       pinch: { 
         from: () => [cameraRef.current.zoom, 0], 
         scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM }
-      }
+      },
+      eventOptions: { passive: false }
     }
   );
 
