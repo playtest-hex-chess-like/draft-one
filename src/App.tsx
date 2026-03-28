@@ -1556,11 +1556,12 @@ export default function App() {
   return (
     <div
       onContextMenu={(e) => e.preventDefault()}
-      className="relative w-screen h-screen overflow-hidden bg-slate-900"
+      className="relative w-screen h-dvh overflow-hidden bg-slate-900"
       style={{
         touchAction: 'none',
         userSelect: 'none',
         WebkitUserSelect: 'none',
+        paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
       <canvas
@@ -1569,7 +1570,10 @@ export default function App() {
         width={windowSize.width}
         height={windowSize.height}
         className="absolute inset-0 w-full h-full touch-none"
-        style={{ cursor: getCursorStyle(), touchAction: 'none' }}
+        style={{ 
+          cursor: getCursorStyle(), 
+          touchAction: 'none',
+        }}
         onContextMenu={(e) => e.preventDefault()}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
