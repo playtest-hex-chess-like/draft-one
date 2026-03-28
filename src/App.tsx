@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useGesture } from '@use-gesture/react';
 import { Undo, Check, Info, Coins, Zap, Crown, Eye, EyeOff, AlertTriangle, Skull } from 'lucide-react';
-import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, stallTimerInactiveFirstXTurns } from './initconfig';
+import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, stallTimerInactiveFirstXTurns, MIN_ZOOM, MAX_ZOOM } from './initconfig';
 
 const PIECE_TYPES: Record<number, { name: string; move: number; rule: string }> = {
   1: { name: 'Scout', move: 5, rule: "Extends frontline +1 tile. Cannot use the salvage mechanic." },
@@ -299,6 +300,7 @@ type GameStateSnapshot = {
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pointerDownInfo = useRef<{ x: number, y: number, button: number, pointerType: string, isPan: boolean } | null>(null);
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [grid, setGrid] = useState<Map<string, Stack>>(new Map());
   const [kingPos, setKingPos] = useState<{ p1: { q: number, r: number } | null, p2: { q: number, r: number } | null }>({ p1: null, p2: null });
@@ -361,6 +363,15 @@ export default function App() {
   grid.forEach((stack) => {
     boardCount[stack.owner] += stack.count;
   });
+
+  const bind = useGesture(
+    {
+      onPinch: ({ offset: [d] }) => setCamera(prev => ({ ...prev, zoom: d })),
+    },
+    {
+      pinch: { from: () => [camera.zoom, 0], scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM } }
+    }
+  );
 
   useEffect(() => {
     const generateStartingBoard = () => {
@@ -789,6 +800,38 @@ export default function App() {
   }, [draw, currentFrontlineSet, opponentFrontlineSet, showBothFrontlines]);
 
   useEffect(() => {
+    if (draggedAllyIndex === null) return;
+
+    const handleGlobalPointerMove = (e: PointerEvent) => {
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      const targetItem = target?.closest('[data-ally-index]');
+      if (targetItem) {
+        const hoverIndex = parseInt(targetItem.getAttribute('data-ally-index') || '', 10);
+        if (!isNaN(hoverIndex) && hoverIndex !== draggedAllyIndex) {
+          const newAllies = [...strikeAllies];
+          const [movedItem] = newAllies.splice(draggedAllyIndex, 1);
+          newAllies.splice(hoverIndex, 0, movedItem);
+          setStrikeAllies(newAllies);
+          setDraggedAllyIndex(hoverIndex);
+        }
+      }
+    };
+
+    const handleGlobalPointerUp = () => {
+      setDraggedAllyIndex(null);
+    };
+
+    window.addEventListener('pointermove', handleGlobalPointerMove);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('pointercancel', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handleGlobalPointerMove);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerUp);
+    };
+  }, [draggedAllyIndex, strikeAllies]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -803,7 +846,7 @@ export default function App() {
 
       setCamera((c) => {
         let newZoom = c.zoom * (direction > 0 ? zoomFactor : 1 / zoomFactor);
-        newZoom = Math.max(0.1, Math.min(newZoom, 5));
+        newZoom = Math.max(MIN_ZOOM, Math.min(newZoom, MAX_ZOOM));
 
         const width = canvas.width;
         const height = canvas.height;
@@ -1114,7 +1157,10 @@ export default function App() {
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.button === 2 || e.button === 1) {
+    const isPan = e.button === 2 || e.button === 1 || e.pointerType !== 'mouse';
+    pointerDownInfo.current = { x: e.clientX, y: e.clientY, button: e.button, pointerType: e.pointerType, isPan };
+
+    if (isPan) {
       setIsPanning(true);
       setLastPan({ x: e.clientX, y: e.clientY });
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -1127,7 +1173,7 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    if (isPanning) {
+    if (isPanning && pointerDownInfo.current?.isPan) {
       const dx = e.clientX - lastPan.x;
       const dy = e.clientY - lastPan.y;
       setCamera((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
@@ -1161,6 +1207,7 @@ export default function App() {
       setIsPanning(false);
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+    pointerDownInfo.current = null;
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1168,6 +1215,18 @@ export default function App() {
       setIsPanning(false);
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+
+    if (pointerDownInfo.current) {
+      const dx = Math.abs(e.clientX - pointerDownInfo.current.x);
+      const dy = Math.abs(e.clientY - pointerDownInfo.current.y);
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      // If it was a touch tap (didn't move much), treat it as a click
+      if (pointerDownInfo.current.pointerType !== 'mouse' && dist < 10) {
+        handleHexClick(e.clientX, e.clientY);
+      }
+    }
+    pointerDownInfo.current = null;
   };
 
   const handleCombatResolution = (salvage: boolean, state: Extract<PopupState, { type: 'combat_salvage' }>) => {
@@ -1495,17 +1554,28 @@ export default function App() {
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-slate-900">
+    <div
+      onContextMenu={(e) => e.preventDefault()}
+      className="relative w-screen h-screen overflow-hidden bg-slate-900"
+      style={{
+        touchAction: 'none',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+      }}
+    >
       <canvas
+        {...bind()}
         ref={canvasRef}
+        width={windowSize.width}
+        height={windowSize.height}
         className="absolute inset-0 w-full h-full touch-none"
         style={{ cursor: getCursorStyle() }}
+        onContextMenu={(e) => e.preventDefault()}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerLeave}
         onPointerLeave={handlePointerLeave}
-        onContextMenu={(e) => e.preventDefault()}
       />
 
       {/* Action Menu Overlay */}
@@ -1678,7 +1748,7 @@ export default function App() {
       })()}
 
       {hoveredHex && grid.has(`${hoveredHex.q},${hoveredHex.r}`) && (
-        <div className="absolute top-24 right-4 w-80 bg-slate-800/95 backdrop-blur border border-slate-700 rounded-xl shadow-2xl p-5 pointer-events-none transition-opacity z-10">
+        <div className="absolute top-48 right-4 w-80 bg-slate-800/95 backdrop-blur border border-slate-700 rounded-xl shadow-2xl p-5 pointer-events-none transition-opacity z-10">
           {(() => {
             const stack = grid.get(`${hoveredHex.q},${hoveredHex.r}`)!;
             const piece = PIECE_TYPES[stack.count] || PIECE_TYPES[1];
@@ -1775,9 +1845,6 @@ export default function App() {
         </div>
 
         <div className="flex flex-col items-center gap-2 pointer-events-auto">
-          <div className="bg-slate-800/80 backdrop-blur px-4 py-2 rounded-full text-slate-300 text-sm shadow-lg border border-slate-700 text-center">
-            Right-click & drag to pan • Scroll to zoom • Left-click to place/upgrade
-          </div>
           {(() => {
             const minTimer = Math.min(stallTimers[1], stallTimers[2]);
             if (minTimer === 0) {
@@ -1880,6 +1947,9 @@ export default function App() {
               </button>
             </div>
           )}
+          <div className="text-xs text-slate-400/80 font-medium text-center mt-1">
+            right-click & drag to pan • scroll to zoom • left-click to place/select
+          </div>
         </div>
       </div>
       {/* Popups */}
@@ -2195,27 +2265,16 @@ export default function App() {
                   return (
                     <div 
                       key={key} 
-                      draggable
-                      onDragStart={(e) => {
+                      data-ally-index={index}
+                      onPointerDown={(e) => {
+                        e.preventDefault(); // Prevent text selection
                         setDraggedAllyIndex(index);
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        if (draggedAllyIndex === null || draggedAllyIndex === index) return;
-                        const newAllies = [...strikeAllies];
-                        const [movedItem] = newAllies.splice(draggedAllyIndex, 1);
-                        newAllies.splice(index, 0, movedItem);
-                        setStrikeAllies(newAllies);
-                        setDraggedAllyIndex(null);
                       }}
                       onMouseEnter={() => setHoveredAllyKey(key)}
                       onMouseLeave={() => setHoveredAllyKey(null)}
-                      className={`flex justify-between items-center p-2 rounded border cursor-grab active:cursor-grabbing ${isPrimary ? 'bg-maroon-900/30 border-maroon-500/50' : 'bg-slate-800 border-slate-700'}`} 
+                      className={`flex justify-between items-center p-2 rounded border cursor-grab active:cursor-grabbing transition-all touch-none select-none 
+                        ${isPrimary ? 'bg-maroon-900/30 border-maroon-500/50' : 'bg-slate-800 border-slate-700'} 
+                        ${draggedAllyIndex === index ? 'opacity-50 scale-95' : 'opacity-100'}`}
                       style={isPrimary ? { backgroundColor: 'rgba(128, 0, 0, 0.2)', borderColor: 'rgba(128, 0, 0, 0.5)' } : {}}
                     >
                       <div className="flex items-center gap-2">
