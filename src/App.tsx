@@ -377,6 +377,7 @@ export default function App() {
         if (first) {
           setIsPinching(true);
           setIsPanning(false);
+        }
         if (last) setIsPinching(false);
 
         const canvas = canvasRef.current;
@@ -394,7 +395,7 @@ export default function App() {
             y: cy - (cy - prev.y) * zoomRatio,
           };
         });
-      }
+      },
     },
     {
       target: canvasRef,
