@@ -384,9 +384,13 @@ export default function App() {
           setIsPanning(false);
 
           return { 
-            lastZoom: cameraRef.current.zoom,
+            startX: cameraRef.current.x, 
+            startY: cameraRef.current.y, 
+            startZoom: cameraRef.current.zoom
           };
         }
+
+        if (!active || !memo) return;
         
         if (last) {
           setIsPinching(false);
@@ -394,19 +398,19 @@ export default function App() {
         }
 
         const canvas = canvasRef.current;
-        if (!canvas || !active) return;
-
         const rect = canvas.getBoundingClientRect();
         const cx = (ox - rect.left) * (canvas.width / rect.width);
         const cy = (oy - rect.top) * (canvas.height / rect.height);
         const zoomRatio = d / camera.zoom;
 
-        setCamera(prev => ({
+        cameraRef.current = {
           zoom: d,
-          x: cx - (cx - prev.x) * zoomRatio,
-          y: cy - (cy - prev.y) * zoomRatio,
-        }));
+          x: cx - (cx - memo.startX) * zoomRatio,
+          y: cy - (cy - memo.startY) * zoomRatio,
+        };
+        draw();
       },
+      onPinchEnd: () => setIsPinching(false),
     },
     {
       pinch: { 
@@ -1218,6 +1222,12 @@ export default function App() {
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!e.isPrimary) {
+      setIsPanning(false);
+      setIsPinching(true);
+      return;
+    }
+    
     const isPan = e.button === 2 || e.button === 1 || e.pointerType !== 'mouse';
     pointerDownInfo.current = { x: e.clientX, y: e.clientY, button: e.button, pointerType: e.pointerType, isPan };
 
