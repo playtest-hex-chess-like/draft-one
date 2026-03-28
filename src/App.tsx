@@ -322,6 +322,7 @@ export default function App() {
   const [history, setHistory] = useState<GameStateSnapshot[]>([]);
   
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1 });
+  const [isPinching, setIsPinching] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [lastPan, setLastPan] = useState({ x: 0, y: 0 });
   const [hoveredHex, setHoveredHex] = useState<{ q: number; r: number } | null>(null);
@@ -366,10 +367,41 @@ export default function App() {
 
   const bind = useGesture(
     {
-      onPinch: ({ offset: [d] }) => setCamera(prev => ({ ...prev, zoom: d })),
+      onPinch: ({ 
+        origin: [ox, oy], 
+        first, 
+        last, 
+        active,
+        offset: [d] 
+      }) => {
+        if (first) {
+          setIsPinching(true);
+          setIsPanning(false);
+        }
+        if (last) setIsPinching(false);
+
+        const canvas = canvasRef.current;
+        if (!canvas || !active) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const cx = (ox - rect.left) * (canvas.width / rect.width);
+        const cy = (oy - rect.top) * (canvas.height / rect.height);
+
+        setCamera(prev => {
+          const zoomRatio = d / prev.zoom;
+          return {
+            zoom: d,
+            x: cx - (cx - prev.x) * zoomRatio,
+            y: cy - (cy - prev.y) * zoomRatio,
+          };
+        });
+      },
     },
     {
-      pinch: { from: () => [camera.zoom, 0], scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM } }
+      pinch: { 
+        from: () => [camera.zoom, 0], 
+        scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM }
+      }
     }
   );
 
@@ -782,17 +814,31 @@ export default function App() {
 
   useEffect(() => {
     const handleResize = () => {
-      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+      const width = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+      const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      
+      setWindowSize({ width, height });
+      
       const canvas = canvasRef.current;
       if (canvas) {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
         draw();
       }
     };
     window.addEventListener('resize', handleResize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleResize);
+      window.visualViewport.addEventListener('scroll', handleResize);
+    }
     handleResize();
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleResize);
+        window.visualViewport.removeEventListener('scroll', handleResize);
+      }
+    };
   }, [draw]);
 
   useEffect(() => {
@@ -838,8 +884,10 @@ export default function App() {
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mouseX = (e.clientX - rect.left) * scaleX;
+      const mouseY = (e.clientY - rect.top) * scaleY;
 
       const zoomFactor = 1.1;
       const direction = e.deltaY < 0 ? 1 : -1;
@@ -884,8 +932,10 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const mouseX = clientX - rect.left;
-    const mouseY = clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mouseX = (clientX - rect.left) * scaleX;
+    const mouseY = (clientY - rect.top) * scaleY;
 
     const width = canvas.width;
     const height = canvas.height;
@@ -1170,6 +1220,8 @@ export default function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isPinching) return;
+    
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -1181,8 +1233,8 @@ export default function App() {
     }
 
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
 
     const width = canvas.width;
     const height = canvas.height;
@@ -1556,11 +1608,12 @@ export default function App() {
   return (
     <div
       onContextMenu={(e) => e.preventDefault()}
-      className="relative w-screen h-screen overflow-hidden bg-slate-900"
+      className="relative w-screen h-[100dvh] overflow-hidden bg-slate-900"
       style={{
         touchAction: 'none',
         userSelect: 'none',
         WebkitUserSelect: 'none',
+        paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
       <canvas
@@ -1569,7 +1622,10 @@ export default function App() {
         width={windowSize.width}
         height={windowSize.height}
         className="absolute inset-0 w-full h-full touch-none"
-        style={{ cursor: getCursorStyle() }}
+        style={{ 
+          cursor: getCursorStyle(), 
+          touchAction: 'none',
+        }}
         onContextMenu={(e) => e.preventDefault()}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
