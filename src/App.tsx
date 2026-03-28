@@ -365,6 +365,11 @@ export default function App() {
     boardCount[stack.owner] += stack.count;
   });
 
+  const cameraRef = useRef(camera);
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
+
   const bind = useGesture(
     {
       onPinch: ({ 
@@ -377,8 +382,16 @@ export default function App() {
         if (first) {
           setIsPinching(true);
           setIsPanning(false);
+
+          return { 
+            lastZoom: cameraRef.current.zoom,
+          };
         }
-        if (last) setIsPinching(false);
+        
+        if (last) {
+          setIsPinching(false);
+          return;
+        }
 
         const canvas = canvasRef.current;
         if (!canvas || !active) return;
@@ -386,20 +399,18 @@ export default function App() {
         const rect = canvas.getBoundingClientRect();
         const cx = (ox - rect.left) * (canvas.width / rect.width);
         const cy = (oy - rect.top) * (canvas.height / rect.height);
+        const zoomRatio = d / camera.zoom;
 
-        setCamera(prev => {
-          const zoomRatio = d / prev.zoom;
-          return {
-            zoom: d,
-            x: cx - (cx - prev.x) * zoomRatio,
-            y: cy - (cy - prev.y) * zoomRatio,
-          };
-        });
+        setCamera(prev => ({
+          zoom: d,
+          x: cx - (cx - prev.x) * zoomRatio,
+          y: cy - (cy - prev.y) * zoomRatio,
+        }));
       },
     },
     {
       pinch: { 
-        from: () => [camera.zoom, 0], 
+        from: () => [cameraRef.current.zoom, 0], 
         scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM }
       }
     }
@@ -1625,6 +1636,8 @@ export default function App() {
         style={{ 
           cursor: getCursorStyle(), 
           touchAction: 'none',
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none',
         }}
         onContextMenu={(e) => e.preventDefault()}
         onPointerDown={handlePointerDown}
