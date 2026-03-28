@@ -301,6 +301,7 @@ type GameStateSnapshot = {
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointerDownInfo = useRef<{ x: number, y: number, button: number, pointerType: string, isPan: boolean } | null>(null);
+  const activePointerId = useRef<number | null>(null);
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [grid, setGrid] = useState<Map<string, Stack>>(new Map());
   const [kingPos, setKingPos] = useState<{ p1: { q: number, r: number } | null, p2: { q: number, r: number } | null }>({ p1: null, p2: null });
@@ -365,11 +366,6 @@ export default function App() {
     boardCount[stack.owner] += stack.count;
   });
 
-  const cameraRef = useRef(camera);
-  useEffect(() => {
-    cameraRef.current = camera;
-  }, [camera]);
-
   const bind = useGesture(
     {
       onPinch: ({ 
@@ -407,7 +403,7 @@ export default function App() {
     },
     {
       pinch: { 
-        from: () => [cameraRef.current.zoom, 0], 
+        from: () => [camera.zoom, 0], 
         scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM }
       },
       eventOptions: { passive: false }
@@ -1216,18 +1212,13 @@ export default function App() {
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === 'touch') {
-      const touches = (e.nativeEvent as TouchEvent).touches;
-      if (touches && touches.length > 1) {
-        setIsPanning(false);
-        return; 
-      }
-    }
+    if (activePointerId.current !== null) return;
     
     const isPan = e.button === 2 || e.button === 1 || e.pointerType !== 'mouse';
     pointerDownInfo.current = { x: e.clientX, y: e.clientY, button: e.button, pointerType: e.pointerType, isPan };
 
     if (isPan) {
+      activePointerId.current = e.pointerId;
       setIsPanning(true);
       setLastPan({ x: e.clientX, y: e.clientY });
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -1237,6 +1228,10 @@ export default function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (activePointerId.current !== null && e.pointerId !== activePointerId.current) {
+      return;
+    }
+    
     if (isPinching) return;
     
     const canvas = canvasRef.current;
@@ -1280,14 +1275,15 @@ export default function App() {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (isPanning) {
+    if (e.pointerId === activePointerId.current) {
       setIsPanning(false);
+      activePointerId.current = null;
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
-
+    
     if (isPinching) {
       setIsPinching(false);
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      try{ e.currentTarget.releasePointerCapture(e.pointerId); } catch(e) {}
     }
 
     if (pointerDownInfo.current) {
