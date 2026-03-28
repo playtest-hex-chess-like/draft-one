@@ -302,6 +302,9 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointerDownInfo = useRef<{ x: number, y: number, button: number, pointerType: string, isPan: boolean } | null>(null);
   const activePointerId = useRef<number | null>(null);
+  const secondaryPointerRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  const initialPinchDistance = useRef(0);
+  const initialPinchZoom = useRef(1);
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [grid, setGrid] = useState<Map<string, Stack>>(new Map());
   const [kingPos, setKingPos] = useState<{ p1: { q: number, r: number } | null, p2: { q: number, r: number } | null }>({ p1: null, p2: null });
@@ -1213,6 +1216,14 @@ export default function App() {
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (activePointerId.current !== null && !e.isPrimary) {
+      secondaryPointerRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      
+      // Calculate the initial distance between Finger 1 (lastPan) and Finger 2
+      const dx = e.clientX - lastPan.x;
+      const dy = e.clientY - lastPan.y;
+      initialPinchDist.current = Math.sqrt(dx * dx + dy * dy);
+      initialPinchZoom.current = camera.zoom;
+
       setIsPinching(true);
       setIsPanning(false);
       return;
@@ -1231,12 +1242,34 @@ export default function App() {
     }
   };
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (isPinching) return;
-    
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {    
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    if (isPinching && secondaryPointerRef.current) {
+      // Update whichever finger moved
+      if (e.pointerId === activePointerId.current) {
+        setLastPan({ x: e.clientX, y: e.clientY });
+      } else if (e.pointerId === secondaryPointerRef.current.id) {
+        secondaryPointerRef.current.x = e.clientX;
+        secondaryPointerRef.current.y = e.clientY;
+      }
+
+      // Calculate current distance between the two fingers
+      const dx = lastPan.x - secondaryPointerRef.current.x;
+      const dy = lastPan.y - secondaryPointerRef.current.y;
+      const currentDist = Math.sqrt(dx * dx + dy * dy);
+
+      // Zoom based on the ratio of change
+      if (initialPinchDist.current > 0) {
+        const zoomFactor = currentDist / initialPinchDist.current;
+        const nextZoom = Math.min(Math.max(initialPinchZoom.current * zoomFactor, MIN_ZOOM), MAX_ZOOM);
+        
+        setCamera(c => ({ ...c, zoom: nextZoom }));
+      }
+      return; // Kill the function here so pinch doesn't trigger pan/hover logic
+    }
+    
     if (isPanning && e.pointerId === activePointerId.current && pointerDownInfo.current?.isPan) {
       const dx = e.clientX - lastPan.x;
       const dy = e.clientY - lastPan.y;
@@ -1248,25 +1281,27 @@ export default function App() {
       }
     }
 
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
+    if (!isPinching) {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    const width = canvas.width;
-    const height = canvas.height;
+      const width = canvas.width;
+      const height = canvas.height;
 
-    const wx = (mouseX - width / 2 - camera.x) / camera.zoom;
-    const wy = (mouseY - height / 2 - camera.y) / camera.zoom;
+      const wx = (mouseX - width / 2 - camera.x) / camera.zoom;
+      const wy = (mouseY - height / 2 - camera.y) / camera.zoom;
 
-    const { q, r } = pixelToAxial(wx, wy, HEX_SIZE);
-    const rounded = axialRound(q, r);
+      const { q, r } = pixelToAxial(wx, wy, HEX_SIZE);
+      const rounded = axialRound(q, r);
 
-    setMousePos({ x: e.clientX, y: e.clientY });
+      setMousePos({ x: e.clientX, y: e.clientY });
 
-    setHoveredHex((prev) => {
-      if (prev?.q === rounded.q && prev?.r === rounded.r) return prev;
-      return { q: rounded.q, r: rounded.r };
-    });
+      setHoveredHex((prev) => {
+        if (prev?.q === rounded.q && prev?.r === rounded.r) return prev;
+        return { q: rounded.q, r: rounded.r };
+      });
+    }
   };
 
   const handlePointerLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1280,14 +1315,18 @@ export default function App() {
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerId === activePointerId.current) {
-      setIsPanning(false);
       activePointerId.current = null;
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      setIsPanning(false);
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(err) {}
     }
     
-    if (isPinching) {
+    if (secondaryPointerRef.current && e.pointerId === secondaryPointerRef.current.id) {
+      secondaryPointerRef.current = null;
       setIsPinching(false);
-      try{ e.currentTarget.releasePointerCapture(e.pointerId); } catch(e) {}
+      
+      initialPinchDist.current = 0;
+      initialPinchZoom.current = 1;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(err) {}
     }
 
     if (pointerDownInfo.current) {
