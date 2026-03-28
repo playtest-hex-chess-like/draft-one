@@ -1569,7 +1569,7 @@ export default function App() {
         width={windowSize.width}
         height={windowSize.height}
         className="absolute inset-0 w-full h-full touch-none"
-        style={{ cursor: getCursorStyle() }}
+        style={{ cursor: getCursorStyle(), touchAction: 'none' }}
         onContextMenu={(e) => e.preventDefault()}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
