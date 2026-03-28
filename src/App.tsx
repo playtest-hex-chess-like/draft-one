@@ -398,8 +398,6 @@ export default function App() {
       },
     },
     {
-      target: canvasRef,
-      eventOptions: { passive: false },
       pinch: { 
         from: () => [camera.zoom, 0], 
         scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM }
