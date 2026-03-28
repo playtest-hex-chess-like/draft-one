@@ -394,7 +394,7 @@ export default function App() {
             y: cy - (cy - prev.y) * zoomRatio,
           };
         });
-      },
+      }
     },
     {
       target: canvasRef,
