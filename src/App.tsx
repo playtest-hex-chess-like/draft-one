@@ -375,7 +375,6 @@ export default function App() {
       onPinch: ({ 
         origin: [ox, oy], 
         first, 
-        last, 
         active,
         offset: [d] 
       }) => {
@@ -383,32 +382,26 @@ export default function App() {
           setIsPinching(true);
           setIsPanning(false);
 
-          return { 
-            startX: cameraRef.current.x, 
-            startY: cameraRef.current.y, 
-            startZoom: cameraRef.current.zoom
-          };
-        }
-
-        if (!active || !memo) return;
-        
-        if (last) {
-          setIsPinching(false);
           return;
         }
 
+        if (!active) return;
+
         const canvas = canvasRef.current;
+        if (!canvas) return;
+        
         const rect = canvas.getBoundingClientRect();
         const cx = (ox - rect.left) * (canvas.width / rect.width);
         const cy = (oy - rect.top) * (canvas.height / rect.height);
-        const zoomRatio = d / camera.zoom;
 
-        cameraRef.current = {
-          zoom: d,
-          x: cx - (cx - memo.startX) * zoomRatio,
-          y: cy - (cy - memo.startY) * zoomRatio,
-        };
-        draw();
+        setCamera(prev => {
+          const zoomRatio = d / prev.zoom;
+          return {
+            zoom: d,
+            x: cx - (cx - prev.x) * zoomRatio,
+            y: cy - (cy - prev.y) * zoomRatio,
+          };
+        });
       },
       onPinchEnd: () => setIsPinching(false),
     },
