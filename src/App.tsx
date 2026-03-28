@@ -782,17 +782,31 @@ export default function App() {
 
   useEffect(() => {
     const handleResize = () => {
-      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+      const width = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+      const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      
+      setWindowSize({ width, height });
+      
       const canvas = canvasRef.current;
       if (canvas) {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
         draw();
       }
     };
     window.addEventListener('resize', handleResize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleResize);
+      window.visualViewport.addEventListener('scroll', handleResize);
+    }
     handleResize();
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleResize);
+        window.visualViewport.removeEventListener('scroll', handleResize);
+      }
+    };
   }, [draw]);
 
   useEffect(() => {
@@ -838,8 +852,10 @@ export default function App() {
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mouseX = (clientX - rect.left) * scaleX;
+      const mouseY = (clientY - rect.top) * scaleY;
 
       const zoomFactor = 1.1;
       const direction = e.deltaY < 0 ? 1 : -1;
@@ -884,8 +900,10 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const mouseX = clientX - rect.left;
-    const mouseY = clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mouseX = (clientX - rect.left) * scaleX;
+    const mouseY = (clientY - rect.top) * scaleY;
 
     const width = canvas.width;
     const height = canvas.height;
@@ -1556,7 +1574,7 @@ export default function App() {
   return (
     <div
       onContextMenu={(e) => e.preventDefault()}
-      className="relative w-screen h-dvh overflow-hidden bg-slate-900"
+      className="relative w-screen h-[100dvh] overflow-hidden bg-slate-900"
       style={{
         touchAction: 'none',
         userSelect: 'none',
