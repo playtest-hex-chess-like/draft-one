@@ -322,6 +322,7 @@ export default function App() {
   const [history, setHistory] = useState<GameStateSnapshot[]>([]);
   
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1 });
+  const [isPinching, setIsPinching] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [lastPan, setLastPan] = useState({ x: 0, y: 0 });
   const [hoveredHex, setHoveredHex] = useState<{ q: number; r: number } | null>(null);
@@ -366,10 +367,42 @@ export default function App() {
 
   const bind = useGesture(
     {
-      onPinch: ({ offset: [d] }) => setCamera(prev => ({ ...prev, zoom: d })),
+      onPinch: ({ 
+        origin: [ox, oy], 
+        first, 
+        last, 
+        active,
+        offset: [d] 
+      }) => {
+        if (first) {
+          setIsPinching(true);
+          setIsPanning(false);
+        if (last) setIsPinching(false);
+
+        const canvas = canvasRef.current;
+        if (!canvas || !active) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const cx = (ox - rect.left) * (canvas.width / rect.width);
+        const cy = (oy - rect.top) * (canvas.height / rect.height);
+
+        setCamera(prev => {
+          const zoomRatio = d / prev.zoom;
+          return {
+            zoom: d,
+            x: cx - (cx - prev.x) * zoomRatio,
+            y: cy - (cy - prev.y) * zoomRatio,
+          };
+        });
+      },
     },
     {
-      pinch: { from: () => [camera.zoom, 0], scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM } }
+      target: canvasRef,
+      eventOptions: { passive: false },
+      pinch: { 
+        from: () => [camera.zoom, 0], 
+        scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM }
+      }
     }
   );
 
@@ -1188,6 +1221,8 @@ export default function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isPinching) return;
+    
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -1199,8 +1234,8 @@ export default function App() {
     }
 
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
 
     const width = canvas.width;
     const height = canvas.height;
