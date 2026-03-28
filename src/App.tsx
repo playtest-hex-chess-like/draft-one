@@ -1212,7 +1212,11 @@ export default function App() {
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (activePointerId.current !== null) return;
+    if (activePointerId.current !== null && !e.isPrimary) {
+      setIsPinching(true);
+      setIsPanning(false);
+      return;
+    }
     
     const isPan = e.button === 2 || e.button === 1 || e.pointerType !== 'mouse';
     pointerDownInfo.current = { x: e.clientX, y: e.clientY, button: e.button, pointerType: e.pointerType, isPan };
@@ -1228,20 +1232,20 @@ export default function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (activePointerId.current !== null && e.pointerId !== activePointerId.current) {
-      return;
-    }
-    
     if (isPinching) return;
     
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    if (isPanning && pointerDownInfo.current?.isPan) {
+    if (isPanning && e.pointerId === activePointerId.current && pointerDownInfo.current?.isPan) {
       const dx = e.clientX - lastPan.x;
       const dy = e.clientY - lastPan.y;
-      setCamera((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
-      setLastPan({ x: e.clientX, y: e.clientY });
+    
+      // ignore massive jumps
+      if (Math.abs(dx) < 200 && Math.abs(dy) < 200) {
+        setCamera((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
+        setLastPan({ x: e.clientX, y: e.clientY });
+      }
     }
 
     const rect = canvas.getBoundingClientRect();
