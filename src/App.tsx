@@ -1215,10 +1215,12 @@ export default function App() {
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!e.isPrimary) {
-      setIsPanning(false);
-      setIsPinching(true);
-      return;
+    if (e.pointerType === 'touch') {
+      const touches = (e.nativeEvent as TouchEvent).touches;
+      if (touches && touches.length > 1) {
+        setIsPanning(false);
+        return; 
+      }
     }
     
     const isPan = e.button === 2 || e.button === 1 || e.pointerType !== 'mouse';
@@ -1279,6 +1281,11 @@ export default function App() {
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (isPanning) {
       setIsPanning(false);
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+
+    if (isPinching) {
+      setIsPinching(false);
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
 
