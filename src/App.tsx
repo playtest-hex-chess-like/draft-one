@@ -854,8 +854,8 @@ export default function App() {
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
-      const mouseX = (clientX - rect.left) * scaleX;
-      const mouseY = (clientY - rect.top) * scaleY;
+      const mouseX = (e.clientX - rect.left) * scaleX;
+      const mouseY = (e.clientY - rect.top) * scaleY;
 
       const zoomFactor = 1.1;
       const direction = e.deltaY < 0 ? 1 : -1;
