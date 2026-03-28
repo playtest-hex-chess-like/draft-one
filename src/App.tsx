@@ -365,7 +365,12 @@ export default function App() {
     boardCount[stack.owner] += stack.count;
   });
 
-  const bind = useMemo(() => useGesture(
+  const cameraRef = useRef(camera);
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
+
+  const bind = useGesture(
     {
       onPinch: ({ 
         origin: [ox, oy], 
@@ -379,9 +384,7 @@ export default function App() {
           setIsPanning(false);
 
           return { 
-            startZoom: camera.zoom, 
-            startX: camera.x, 
-            startY: camera.y 
+            lastZoom: cameraRef.current.zoom,
           };
         }
         
@@ -407,11 +410,11 @@ export default function App() {
     },
     {
       pinch: { 
-        from: () => [camera.zoom, 0], 
+        from: () => [cameraRef.current.zoom, 0], 
         scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM }
       }
     }
-  ), [camera, isPanning]);
+  );
 
   useEffect(() => {
     const generateStartingBoard = () => {
