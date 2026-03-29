@@ -1,15 +1,15 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useGesture } from '@use-gesture/react';
 import { Undo, Check, Info, Coins, Zap, Crown, Eye, EyeOff, AlertTriangle, Skull } from 'lucide-react';
-import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, stallTimerInactiveFirstXTurns, MIN_ZOOM, MAX_ZOOM } from './initconfig';
+import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, stallTimerInactiveFirstXTurns, MIN_ZOOM, MAX_ZOOM, TURN_TIMER_INITIAL, TURN_TIMER_ADD, TURN_TIMER_WARNING } from './initconfig';
 
 const PIECE_TYPES: Record<number, { name: string; move: number; rule: string }> = {
-  1: { name: 'Scout', move: 5, rule: "Extends frontline +1 tile. Cannot use the salvage mechanic." },
-  2: { name: 'Cavalry', move: 4, rule: "+1 Attack Power when attacking. Can move axially and diagonally (slipping between hexes)." },
-  3: { name: 'Small Army', move: 3, rule: "Can attack forts with adjacent allied armies to ignore the -1 penalty. Independent salvage." },
-  4: { name: 'Big Army', move: 2, rule: "Can attack forts with adjacent allied armies to ignore the -1 penalty. Independent salvage." },
-  5: { name: 'Encampment', move: 0, rule: "Creates permanent Fort tile. On a Fort Tile, units other than the king and scout may spend one action to use the move/attack/combine actions with a portion of their stack." },
-  6: { name: 'King', move: 0, rule: "This piece starts on a Fort tile. Move Speed is based on stack count. Inherits the coordinated strike and cavalry movement abilities at the appropriate stack counts." },
+  1: { name: 'Scout', move: 4, rule: "Extends the frontline by 2 tiles instead of 1." },
+  2: { name: 'Cavalry', move: 3, rule: "+1 Attack Power when attacking. Moves axially and diagonally with high mobility." },
+  3: { name: 'Small Army', move: 3, rule: "Proficient in battlefied salvaging. Attacks in coordination with other allied armies during which fort tile penalties are applied only once and salvage is done independently." },
+  4: { name: 'Big Army', move: 2, rule: "Proficient in battlefied salvaging. Attacks in coordination with other allied armies during which fort tile penalties are applied only once and salvage is done independently." },
+  5: { name: 'Encampment', move: 0, rule: "Places permanent fort tile upon creation. The fort tile imposes penalties onto attackers and units other than the king and scout on the fort tile may spend one action to use the move/attack/combine actions with a portion of their stack." },
+  6: { name: 'King', move: 0, rule: "This piece starts on a fort tile. Move Speed is based on stack count. Inherits the coordinated strike and the cavalry movement and attack abilities at the appropriate stack counts." },
 };
 
 type Player = 1 | 2;
@@ -148,7 +148,35 @@ function getActiveFrontline(
       }
     }
   }
-  return Array.from(finalAura);
+
+  // Filter finalAura to remove disconnected "aura islands"
+  const connectedToKing = new Set<string>();
+  const kingKey = `${king.q},${king.r}`;
+  const bfsQueue = [king];
+  
+  connectedToKing.add(kingKey);
+
+  while (bfsQueue.length > 0) {
+    const curr = bfsQueue.shift()!;
+    const neighbors = getNeighbors(curr.q, curr.r);
+    
+    for (const n of neighbors) {
+      const nKey = `${n.q},${n.r}`;
+      if (finalAura.has(nKey) && !connectedToKing.has(nKey)) {
+        connectedToKing.add(nKey);
+        bfsQueue.push(n);
+      }
+    }
+  }
+
+  const trulyFinalAura = new Set<string>();
+  for (const hex of finalAura) {
+    if (connectedToKing.has(hex)) {
+      trulyFinalAura.add(hex);
+    }
+  }
+  
+  return Array.from(trulyFinalAura);
 }
 
 const getReachableHexes = (start: {q: number, r: number}, moveSpeed: number, grid: Map<string, Stack>) => {
@@ -246,8 +274,13 @@ const calculateBattlePower = (attacker: Stack, defender: Stack, targetHex: {q: n
     attackerMods -= 1;
   }
   
-  const isCavalry = attacker.count === 2 || (attacker.isKing && attacker.count === 1);
+  const isCavalry = attacker.count === 2 && !attacker.isKing;
+  const hasKingBonus = attacker.isKing && attacker.count >= 1 && attacker.count <= 4;
+  
   if (isCavalry) {
+    attackerMods += 1;
+  }
+  if (hasKingBonus) {
     attackerMods += 1;
   }
   
@@ -257,9 +290,10 @@ const calculateBattlePower = (attacker: Stack, defender: Stack, targetHex: {q: n
   const finalDefenderPower = defenderPower;
   
   let breakdown = "No modifiers";
-  if (isFort || isCavalry) {
+  if (isFort || isCavalry || hasKingBonus) {
     const parts = [];
     if (isCavalry) parts.push("+1 (Cavalry Bonus)");
+    if (hasKingBonus) parts.push("+1 (King Bonus)");
     if (isFort) parts.push("-1 (Fort Penalty)");
     breakdown = parts.join(", ");
   }
@@ -279,12 +313,12 @@ type SplinterInfo = { stack: Stack, sourceKey: string };
 type PopupState = 
   | null
   | { type: 'combine_limit', excess: number, targetKey: string, sourceKey: string, splinter?: SplinterInfo }
-  | { type: 'combat_report', attackerKey: string, defenderKey: string, entryKey: string, attackerStart: number, defenderStart: number, attackerRemaining: number, defenderRemaining: number, attackerOwner: number, defenderOwner: number, splinter?: SplinterInfo }
-  | { type: 'combat_salvage', attackerKey: string, defenderKey: string, entryKey: string, attackerRemaining: number, defenderRemaining: number, splinter?: SplinterInfo }
+  | { type: 'combat_report', attackerKey: string, defenderKey: string, entryKey: string, attackerStart: number, defenderStart: number, attackerRemaining: number, defenderRemaining: number, attackerOwner: number, defenderOwner: number, attackerIsKing: boolean, splinter?: SplinterInfo }
+  | { type: 'combat_salvage', attackerKey: string, defenderKey: string, entryKey: string, attackerRemaining: number, defenderRemaining: number, attackerIsKing: boolean, splinter?: SplinterInfo }
   | { type: 'combat_advance', attackerKey: string, defenderKey: string, entryKey: string, attackerRemaining: number, splinter?: SplinterInfo }
-  | { type: 'coordinated_strike_report', targetKey: string, primaryAttackerKey: string, participants: { key: string, startCount: number, remainingCount: number }[], defenderStart: number, defenderRemaining: number, defenderOwner: number, attackerOwner: number }
-  | { type: 'coordinated_strike_salvage', targetKey: string, primaryAttackerKey: string, participants: { key: string, startCount: number, remainingCount: number }[], defenderRemaining: number, attackerOwner: number }
-  | { type: 'coordinated_strike_advance', primaryAttackerKey: string, targetKey: string, participants: { key: string, startCount: number, remainingCount: number }[], attackerOwner: number };
+  | { type: 'coordinated_strike_report', targetKey: string, primaryAttackerKey: string, participants: { key: string, startCount: number, remainingCount: number, isKing: boolean }[], defenderStart: number, defenderRemaining: number, defenderOwner: number, attackerOwner: number }
+  | { type: 'coordinated_strike_salvage', targetKey: string, primaryAttackerKey: string, participants: { key: string, startCount: number, remainingCount: number, isKing: boolean }[], defenderRemaining: number, attackerOwner: number }
+  | { type: 'coordinated_strike_advance', primaryAttackerKey: string, targetKey: string, participants: { key: string, startCount: number, remainingCount: number, isKing: boolean }[], attackerOwner: number };
 
 type GameStateSnapshot = {
   grid: Map<string, Stack>;
@@ -359,6 +393,13 @@ export default function App() {
   const [winner, setWinner] = useState<Player | null>(null);
   const [winMessage, setWinMessage] = useState<string | null>(null);
   const [castlePos, setCastlePos] = useState<{ p1: { q: number, r: number } | null, p2: { q: number, r: number } | null }>({ p1: null, p2: null });
+  const [turnTimers, setTurnTimers] = useState<Record<Player, number>>({ 1: TURN_TIMER_INITIAL, 2: TURN_TIMER_INITIAL });
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -856,6 +897,24 @@ export default function App() {
   }, [draw, currentFrontlineSet, opponentFrontlineSet, showBothFrontlines]);
 
   useEffect(() => {
+    if (!TURN_TIMER_INITIAL || TURN_TIMER_INITIAL <= 0 || winner) return;
+
+    const interval = setInterval(() => {
+      setTurnTimers(prev => {
+        const newTime = prev[currentPlayer] - 1;
+        if (newTime <= 0) {
+          setWinner(currentPlayer === 1 ? 2 : 1);
+          setWinMessage(`Player ${currentPlayer === 1 ? 2 : 1} wins on time!`);
+          return { ...prev, [currentPlayer]: 0 };
+        }
+        return { ...prev, [currentPlayer]: newTime };
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [currentPlayer, winner]);
+
+  useEffect(() => {
     if (draggedAllyIndex === null) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
@@ -1120,10 +1179,12 @@ export default function App() {
         const targetKeyStr = `${attackTarget!.q},${attackTarget!.r}`;
         const isFort = terrainGrid.get(targetKeyStr)?.type === 'fort';
         const fortDamage = isFort ? 1 : 0;
-        const isCavalry = sourceStack.count === 2 || (sourceStack.isKing && sourceStack.count === 1);
+        const isCavalry = sourceStack.count === 2 && !sourceStack.isKing;
+        const hasKingBonus = sourceStack.isKing && sourceStack.count >= 1 && sourceStack.count <= 4;
         const cavalryBonus = isCavalry ? 1 : 0;
+        const kingBonus = hasKingBonus ? 1 : 0;
         
-        let actualAttackerRemaining = Math.max(0, sourceStack.count - defenderDamage - fortDamage + cavalryBonus);
+        let actualAttackerRemaining = Math.max(0, sourceStack.count - defenderDamage - fortDamage + cavalryBonus + kingBonus);
         const actualDefenderRemaining = Math.max(0, targetStack.count - attackerDamage);
         
         saveHistory();
@@ -1138,6 +1199,7 @@ export default function App() {
           defenderRemaining: actualDefenderRemaining,
           attackerOwner: sourceStack.owner,
           defenderOwner: targetStack.owner,
+          attackerIsKing: sourceStack.isKing || false,
           splinter: activeSplinter || undefined
         });
       } else {
@@ -1461,8 +1523,8 @@ export default function App() {
   };
 
   const handleCoordinatedStrikeReport = (state: Extract<PopupState, { type: 'coordinated_strike_report' }>) => {
-    const anyDamaged = state.participants.some(p => p.remainingCount < p.startCount);
-    if (anyDamaged) {
+    const anySalvageable = state.participants.some(p => p.remainingCount < p.startCount && !p.isKing && (p.startCount === 3 || p.startCount === 4));
+    if (anySalvageable) {
       setPopupState({
         type: 'coordinated_strike_salvage',
         targetKey: state.targetKey,
@@ -1663,6 +1725,13 @@ export default function App() {
     }
     setIsDoomed(nextIsDoomed);
 
+    if (TURN_TIMER_INITIAL && TURN_TIMER_INITIAL > 0) {
+      setTurnTimers(prev => ({
+        ...prev,
+        [currentPlayer]: prev[currentPlayer] + TURN_TIMER_ADD
+      }));
+    }
+
     setCurrentPlayer(nextPlayer);
     setTurnNumber((t) => t + 1);
     setAp(2);
@@ -1744,11 +1813,11 @@ export default function App() {
         if (!stack) return null;
 
         const piece = PIECE_TYPES[stack.count] || PIECE_TYPES[1];
-        const moveSpeed = stack.isKing && stack.count === 1 ? 4 : piece.move;
+        const moveSpeed = stack.isKing && stack.count === 1 ? PIECE_TYPES[2].move : piece.move;
         const isImmobile = moveSpeed === 0;
 
         const maxCount = stack.isKing ? 6 : 5;
-        const canFortify = !isImmobile && stack.count < maxCount && reserves[currentPlayer] > 0 && ap > 0 && !stack.isKing;
+        const canFortify = !isImmobile && stack.count < maxCount && reserves[currentPlayer] > 0 && ap > 0 && !stack.isKing && currentFrontlineSet.has(key);
         const canMove = !isImmobile && ap > 0;
         const canCombine = !isImmobile && ap > 0 && !stack.isKing;
         const canAttack = !isImmobile && ap > 0;
@@ -1924,7 +1993,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-2 text-slate-300 text-sm">
                   <span className="font-semibold text-slate-400">Move Speed:</span>
-                  <span className="bg-slate-700 px-2 py-0.5 rounded font-mono">{stack.isKing && stack.count === 1 ? 4 : piece.move}</span>
+                  <span className="bg-slate-700 px-2 py-0.5 rounded font-mono">{stack.isKing && stack.count === 1 ? PIECE_TYPES[2].move : piece.move}</span>
                 </div>
                 <div className="text-sm text-slate-300 leading-relaxed bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
                   <span className="font-semibold text-slate-400 block mb-1">Special Rule:</span>
@@ -1954,7 +2023,7 @@ export default function App() {
 
         return (
           <div 
-            className="absolute z-30 bg-slate-900/95 backdrop-blur border border-red-500/50 rounded-lg shadow-xl p-3 pointer-events-none w-48"
+            className="absolute z-30 bg-slate-900/95 backdrop-blur border border-red-500/50 rounded-lg shadow-xl p-3 pointer-events-none w-64"
             style={{ left: mousePos.x + 15, top: mousePos.y + 15 }}
           >
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 border-b border-slate-700 pb-1">Battle Data</div>
@@ -1981,7 +2050,14 @@ export default function App() {
         <div className={`bg-slate-800/90 backdrop-blur p-4 rounded-xl border shadow-xl w-64 pointer-events-auto transition-colors ${currentPlayer === 1 ? 'border-blue-500 shadow-blue-900/20' : 'border-slate-700'}`}>
           <div className="flex justify-between items-center mb-2">
             <span className="text-blue-400 font-bold">Player 1</span>
-            <span className="text-slate-300 text-sm font-mono">Board: {boardCount[1]}</span>
+            <div className="flex items-center gap-2">
+              {TURN_TIMER_INITIAL && TURN_TIMER_INITIAL > 0 && (
+                <span className={`font-mono text-sm px-2 py-0.5 rounded bg-slate-900 ${turnTimers[1] <= TURN_TIMER_WARNING ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
+                  {formatTime(turnTimers[1])}
+                </span>
+              )}
+              <span className="text-slate-300 text-sm font-mono">Board: {boardCount[1]}</span>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-slate-200 mb-2">
             <Coins size={16} className="text-blue-400" />
@@ -2029,7 +2105,14 @@ export default function App() {
         <div className={`bg-slate-800/90 backdrop-blur p-4 rounded-xl border shadow-xl w-64 pointer-events-auto transition-colors ${currentPlayer === 2 ? 'border-red-500 shadow-red-900/20' : 'border-slate-700'}`}>
           <div className="flex justify-between items-center mb-2">
             <span className="text-red-400 font-bold">Player 2</span>
-            <span className="text-slate-300 text-sm font-mono">Board: {boardCount[2]}</span>
+            <div className="flex items-center gap-2">
+              {TURN_TIMER_INITIAL && TURN_TIMER_INITIAL > 0 && (
+                <span className={`font-mono text-sm px-2 py-0.5 rounded bg-slate-900 ${turnTimers[2] <= TURN_TIMER_WARNING ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
+                  {formatTime(turnTimers[2])}
+                </span>
+              )}
+              <span className="text-slate-300 text-sm font-mono">Board: {boardCount[2]}</span>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-slate-200 mb-2">
             <Coins size={16} className="text-red-400" />
@@ -2201,15 +2284,16 @@ export default function App() {
                         entryKey: popupState.entryKey,
                         attackerRemaining: popupState.attackerRemaining,
                         defenderRemaining: popupState.defenderRemaining,
+                        attackerIsKing: popupState.attackerIsKing,
                         splinter: popupState.splinter
                       };
                       
-                      if (popupState.attackerStart === 1) {
-                        handleCombatResolution(false, salvageState);
-                      } else if (popupState.attackerStart === 2 && popupState.attackerRemaining >= 2) {
-                        handleCombatResolution(false, salvageState);
-                      } else {
+                      const canSalvage = !popupState.attackerIsKing && (popupState.attackerStart === 3 || popupState.attackerStart === 4) && popupState.attackerRemaining < popupState.attackerStart;
+                      
+                      if (canSalvage) {
                         setPopupState(salvageState);
+                      } else {
+                        handleCombatResolution(false, salvageState);
                       }
                     }}
                     className="px-4 py-2 rounded-lg font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
@@ -2326,17 +2410,18 @@ export default function App() {
                   <div className="space-y-3 mb-6 max-h-48 overflow-y-auto custom-scrollbar pr-2">
                     {popupState.participants.map((p, i) => {
                       const isDamaged = p.remainingCount < p.startCount;
+                      const canSalvage = isDamaged && !p.isKing && (p.startCount === 3 || p.startCount === 4);
                       return (
-                        <div key={p.key} className={`flex items-center justify-between p-2 rounded border ${isDamaged ? 'bg-slate-800 border-slate-600' : 'bg-slate-800/50 border-slate-700/50 opacity-60'}`}>
+                        <div key={p.key} className={`flex items-center justify-between p-2 rounded border ${canSalvage ? 'bg-slate-800 border-slate-600' : 'bg-slate-800/50 border-slate-700/50 opacity-60'}`}>
                           <div>
                             <div className="text-sm font-medium text-slate-200">Army {i + 1} {p.key === popupState.primaryAttackerKey ? '(Primary)' : ''}</div>
-                            <div className="text-xs text-slate-400">Remaining: {p.remainingCount}</div>
+                            <div className="text-xs text-slate-400">Remaining: {p.remainingCount} {(!canSalvage && isDamaged) ? '(Cannot Salvage)' : ''}</div>
                           </div>
                           <label className="flex items-center cursor-pointer">
                             <input 
                               type="checkbox" 
                               name={`salvage_${p.key}`}
-                              disabled={!isDamaged}
+                              disabled={!canSalvage}
                               className="sr-only peer"
                             />
                             <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600 relative"></div>
@@ -2390,14 +2475,28 @@ export default function App() {
         if (!targetStack) return null;
 
         let rawAttackerPower = 0;
+        let coordinatedBonus = strikeAllies.length;
+        let kingBonus = 0;
         strikeAllies.forEach(key => {
           const stack = grid.get(key);
-          if (stack) rawAttackerPower += stack.count;
+          if (stack) {
+            rawAttackerPower += stack.count;
+            if (stack.isKing && stack.count >= 1 && stack.count <= 4) {
+              kingBonus += 1;
+            }
+          }
         });
         
         const isFort = terrainGrid.get(targetKey)?.type === 'fort';
-        const attackerPower = isFort && rawAttackerPower > 0 ? rawAttackerPower - 1 : rawAttackerPower;
+        const attackerPower = isFort && rawAttackerPower > 0 ? rawAttackerPower - 1 + coordinatedBonus + kingBonus : rawAttackerPower + coordinatedBonus + kingBonus;
         const defenderPower = targetStack.count;
+        
+        let breakdown = "No modifiers";
+        const parts = [];
+        if (coordinatedBonus > 0) parts.push(`+${coordinatedBonus} (Coordinated Strike)`);
+        if (kingBonus > 0) parts.push(`+${kingBonus} (King Bonus)`);
+        if (isFort) parts.push("-1 (Fort Penalty)");
+        if (parts.length > 0) breakdown = parts.join(", ");
 
         return (
           <div className="absolute top-[116px] left-4 w-96 bg-slate-900/95 backdrop-blur border border-red-500/50 rounded-xl shadow-2xl p-5 z-20 flex flex-col gap-4">
@@ -2461,6 +2560,9 @@ export default function App() {
                   <span className="text-3xl font-bold text-red-400">{defenderPower}</span>
                 </div>
               </div>
+              <div className="text-[10px] text-slate-500 italic bg-slate-800/50 p-1.5 rounded">
+                Mods: {breakdown}
+              </div>
             </div>
 
             <div className="flex gap-2 mt-2">
@@ -2488,7 +2590,8 @@ export default function App() {
                   const participants = participantKeys.map(key => ({
                     key,
                     startCount: grid.get(key)!.count,
-                    remainingCount: grid.get(key)!.count
+                    remainingCount: grid.get(key)!.count,
+                    isKing: grid.get(key)!.isKing || false
                   }));
 
                   let startIndex = 0
@@ -2500,6 +2603,15 @@ export default function App() {
                       startIndex = 1;
                     }
                   }
+
+                  const coordinatedBonus = participants.length;
+                  let kingBonus = 0;
+                  participants.forEach(p => {
+                    if (p.isKing && p.startCount >= 1 && p.startCount <= 4) {
+                      kingBonus += 1;
+                    }
+                  });
+                  defenderRemaining = Math.max(0, defenderRemaining - coordinatedBonus - kingBonus);
 
                   let allParticipantsZero = false;
                   while (defenderRemaining > 0 && !allParticipantsZero) {
