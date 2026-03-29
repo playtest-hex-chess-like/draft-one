@@ -305,6 +305,8 @@ export default function App() {
   const secondaryPointerRef = useRef<{ id: number; x: number; y: number } | null>(null);
   const initialPinchDistance = useRef(0);
   const initialPinchZoom = useRef(1);
+  const initialPinchCenter = useRef({ x: 0, y: 0 });
+  const initialCameraPos = useRef({ x: 0, y: 0 });
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [grid, setGrid] = useState<Map<string, Stack>>(new Map());
   const [kingPos, setKingPos] = useState<{ p1: { q: number, r: number } | null, p2: { q: number, r: number } | null }>({ p1: null, p2: null });
@@ -1221,11 +1223,17 @@ export default function App() {
       // Calculate the initial distance between Finger 1 (lastPan) and Finger 2
       const dx = e.clientX - lastPan.x;
       const dy = e.clientY - lastPan.y;
-      initialPinchDist.current = Math.sqrt(dx * dx + dy * dy);
+      initialPinchDistance.current = Math.sqrt(dx * dx + dy * dy);
       initialPinchZoom.current = camera.zoom;
+      initialPinchCenter.current = {
+        x: (e.clientX + lastPan.x) / 2,
+        y: (e.clientY + lastPan.y) / 2
+      };
+      initialCameraPos.current = { x: camera.x, y: camera.y };
 
       setIsPinching(true);
       setIsPanning(false);
+      pointerDownInfo.current = null;
       return;
     }
     
@@ -1261,11 +1269,27 @@ export default function App() {
       const currentDist = Math.sqrt(dx * dx + dy * dy);
 
       // Zoom based on the ratio of change
-      if (initialPinchDist.current > 0) {
-        const zoomFactor = currentDist / initialPinchDist.current;
+      if (initialPinchDistance.current > 0) {
+        const zoomFactor = currentDist / initialPinchDistance.current;
         const nextZoom = Math.min(Math.max(initialPinchZoom.current * zoomFactor, MIN_ZOOM), MAX_ZOOM);
         
-        setCamera(c => ({ ...c, zoom: nextZoom }));
+        const cx = (lastPan.x + secondaryPointerRef.current.x) / 2;
+        const cy = (lastPan.y + secondaryPointerRef.current.y) / 2;
+        const rect = canvas.getBoundingClientRect();
+        const canvasCx = (cx - rect.left) * (canvas.width / rect.width);
+        const canvasCy = (cy - rect.top) * (canvas.height / rect.height);
+        
+        const initialCanvasCx = (initialPinchCenter.current.x - rect.left) * (canvas.width / rect.width);
+        const initialCanvasCy = (initialPinchCenter.current.y - rect.top) * (canvas.height / rect.height);
+
+        setCamera(prev => {
+          const actualZoomRatio = nextZoom / initialPinchZoom.current;
+          return {
+            zoom: nextZoom,
+            x: canvasCx - canvas.width / 2 - (initialCanvasCx - canvas.width / 2 - initialCameraPos.current.x) * actualZoomRatio,
+            y: canvasCy - canvas.height / 2 - (initialCanvasCy - canvas.height / 2 - initialCameraPos.current.y) * actualZoomRatio,
+          };
+        });
       }
       return; // Kill the function here so pinch doesn't trigger pan/hover logic
     }
@@ -1318,13 +1342,27 @@ export default function App() {
       activePointerId.current = null;
       setIsPanning(false);
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(err) {}
+      
+      if (secondaryPointerRef.current) {
+        activePointerId.current = secondaryPointerRef.current.id;
+        setLastPan({ x: secondaryPointerRef.current.x, y: secondaryPointerRef.current.y });
+        secondaryPointerRef.current = null;
+        setIsPinching(false);
+        setIsPanning(true);
+        initialPinchDistance.current = 0;
+        initialPinchZoom.current = 1;
+      }
     }
     
     if (secondaryPointerRef.current && e.pointerId === secondaryPointerRef.current.id) {
       secondaryPointerRef.current = null;
       setIsPinching(false);
       
-      initialPinchDist.current = 0;
+      if (activePointerId.current !== null) {
+        setIsPanning(true);
+      }
+      
+      initialPinchDistance.current = 0;
       initialPinchZoom.current = 1;
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(err) {}
     }
@@ -1336,7 +1374,7 @@ export default function App() {
 
       // If it was a touch tap (didn't move much), treat it as a click
       if (pointerDownInfo.current.pointerType !== 'mouse' && dist < 10) {
-        handleHexClick(e.clientX, e.clientY);
+        handleHexClick(pointerDownInfo.current.x, pointerDownInfo.current.y);
       }
     }
     pointerDownInfo.current = null;
@@ -1682,8 +1720,10 @@ export default function App() {
         ref={canvasRef}
         width={windowSize.width}
         height={windowSize.height}
-        className="absolute inset-0 w-full h-full touch-none"
+        className="absolute top-0 left-0 touch-none"
         style={{ 
+          width: `${windowSize.width}px`,
+          height: `${windowSize.height}px`,
           cursor: getCursorStyle(), 
           touchAction: 'none',
           WebkitUserSelect: 'none',
