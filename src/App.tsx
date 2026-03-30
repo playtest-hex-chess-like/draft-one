@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useGesture } from '@use-gesture/react';
 import { Undo, Check, Info, Coins, Zap, Crown, Eye, EyeOff, AlertTriangle, Skull } from 'lucide-react';
-import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, stallTimerInactiveFirstXTurns, MIN_ZOOM, MAX_ZOOM, TURN_TIMER_INITIAL, TURN_TIMER_ADD, TURN_TIMER_WARNING } from './initconfig';
+import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, STALL_TIMER_INACTIVE_FIRST_X_TURNS, MIN_ZOOM, MAX_ZOOM, TURN_TIMER_INITIAL, TURN_TIMER_ADD, TURN_TIMER_WARNING } from './initconfig';
 
 const PIECE_TYPES: Record<number, { name: string; move: number; rule: string }> = {
   1: { name: 'Scout', move: 4, rule: "Extends the frontline by 2 tiles instead of 1." },
@@ -247,6 +247,7 @@ const getReachableHexes = (start: {q: number, r: number}, moveSpeed: number, gri
           entryHexesForEnemy.set(nKey, new Set());
         }
         entryHexesForEnemy.get(nKey)!.add(emptyKey);
+        entryHexesForEnemy.get(nKey)!.add(nKey);
       }
     }
   }
@@ -1449,14 +1450,18 @@ export default function App() {
     }
     
     if (state.defenderRemaining === 0 && state.attackerRemaining > 0) {
-      setPopupState({
-        type: 'combat_advance',
-        attackerKey: state.attackerKey,
-        defenderKey: state.defenderKey,
-        entryKey: state.entryKey,
-        attackerRemaining: state.attackerRemaining,
-        splinter: state.splinter
-      });
+      if (state.entryKey === state.defenderKey) {
+        finalizeCombat(state.attackerKey, state.defenderKey, state.entryKey, state.attackerRemaining, 0, true, state.splinter);
+      } else {
+        setPopupState({
+          type: 'combat_advance',
+          attackerKey: state.attackerKey,
+          defenderKey: state.defenderKey,
+          entryKey: state.entryKey,
+          attackerRemaining: state.attackerRemaining,
+          splinter: state.splinter
+        });
+      }
     } else {
       finalizeCombat(state.attackerKey, state.defenderKey, state.entryKey, state.attackerRemaining, state.defenderRemaining, false, state.splinter);
     }
@@ -1497,10 +1502,17 @@ export default function App() {
           setKingPos(prev => ({ ...prev, [attackerStack.owner === 1 ? 'p1' : 'p2']: { q: parseInt(qStr), r: parseInt(rStr) } }));
         }
       } else {
-        newGrid.set(entryKey, { ...attackerStack, count: attackerRemaining });
-        if (attackerStack.isKing) {
-          const [qStr, rStr] = entryKey.split(',');
-          setKingPos(prev => ({ ...prev, [attackerStack.owner === 1 ? 'p1' : 'p2']: { q: parseInt(qStr), r: parseInt(rStr) } }));
+        const retreatKey = entryKey === defenderKey ? (splinter ? splinter.sourceKey : attackerKey) : entryKey;
+        
+        if (splinter && retreatKey === splinter.sourceKey) {
+          const existingSource = newGrid.get(splinter.sourceKey)!;
+          newGrid.set(splinter.sourceKey, { ...existingSource, count: existingSource.count + attackerRemaining });
+        } else {
+          newGrid.set(retreatKey, { ...attackerStack, count: attackerRemaining });
+          if (attackerStack.isKing) {
+            const [qStr, rStr] = retreatKey.split(',');
+            setKingPos(prev => ({ ...prev, [attackerStack.owner === 1 ? 'p1' : 'p2']: { q: parseInt(qStr), r: parseInt(rStr) } }));
+          }
         }
       }
     } else if (attackerStack.isKing) {
@@ -1696,7 +1708,7 @@ export default function App() {
     
     const nextPlayerTurnCount = Math.floor(turnNumber / 2) + 1;
     let nextPlayerStallTimer = stallTimers[nextPlayer];
-    if (nextPlayerTurnCount > stallTimerInactiveFirstXTurns) {
+    if (nextPlayerTurnCount > STALL_TIMER_INACTIVE_FIRST_X_TURNS) {
       nextPlayerStallTimer = Math.max(0, stallTimers[nextPlayer] - 1);
     }
 
@@ -2051,7 +2063,7 @@ export default function App() {
           <div className="flex justify-between items-center mb-2">
             <span className="text-blue-400 font-bold">Player 1</span>
             <div className="flex items-center gap-2">
-              {TURN_TIMER_INITIAL && TURN_TIMER_INITIAL > 0 && (
+              {TURN_TIMER_INITIAL > 0 && (
                 <span className={`font-mono text-sm px-2 py-0.5 rounded bg-slate-900 ${turnTimers[1] <= TURN_TIMER_WARNING ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
                   {formatTime(turnTimers[1])}
                 </span>
@@ -2106,7 +2118,7 @@ export default function App() {
           <div className="flex justify-between items-center mb-2">
             <span className="text-red-400 font-bold">Player 2</span>
             <div className="flex items-center gap-2">
-              {TURN_TIMER_INITIAL && TURN_TIMER_INITIAL > 0 && (
+              {TURN_TIMER_INITIAL > 0 && (
                 <span className={`font-mono text-sm px-2 py-0.5 rounded bg-slate-900 ${turnTimers[2] <= TURN_TIMER_WARNING ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
                   {formatTime(turnTimers[2])}
                 </span>
@@ -2740,8 +2752,25 @@ export default function App() {
                       setHighlightedHexes(reachable.reachableAllies);
                     } else if (splinterAction === 'attack') {
                       setActionState('attacking_target');
-                      setHighlightedHexes(reachable.validEnemies);
-                      setEntryHexesMap(reachable.entryHexesForEnemy);
+                      
+                      const sourceKey = `${selectedStack.q},${selectedStack.r}`;
+                      const filteredEnemies = new Set<string>();
+                      const filteredEntryHexes = new Map<string, Set<string>>();
+                      
+                      for (const enemy of reachable.validEnemies) {
+                        const entries = reachable.entryHexesForEnemy.get(enemy);
+                        if (entries) {
+                          const newEntries = new Set(entries);
+                          newEntries.delete(sourceKey);
+                          if (newEntries.size > 0) {
+                            filteredEnemies.add(enemy);
+                            filteredEntryHexes.set(enemy, newEntries);
+                          }
+                        }
+                      }
+                      
+                      setHighlightedHexes(filteredEnemies);
+                      setEntryHexesMap(filteredEntryHexes);
                     }
                     
                     setSplinterAction(null);
