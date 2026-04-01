@@ -11,6 +11,8 @@ export const MAX_ZOOM = 2.1;
 
 export const MOVE_COMBINE_ATTACK_ONCE_ONLY = true;
 
+export const FORTIFY_OVER_FIVE = true;
+
 export const BOARD_GAP = 10;
 export const STARTING_RESERVES = 40;
 export const INITIAL_LAYOUT = [

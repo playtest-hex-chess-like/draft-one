@@ -1,15 +1,28 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useGesture } from '@use-gesture/react';
 import { Undo, Check, Info, Coins, Zap, Crown, Eye, EyeOff, AlertTriangle, Skull } from 'lucide-react';
-import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, STALL_TIMER_INACTIVE_FIRST_X_TURNS, MIN_ZOOM, MAX_ZOOM, TURN_TIMER_INITIAL, TURN_TIMER_ADD, TURN_TIMER_WARNING } from './initconfig';
+import { BOARD_GAP, INITIAL_LAYOUT, STARTING_RESERVES, STALL_TIMER_DEFAULT, stallTimerInfoVisible, STALL_TIMER_INACTIVE_FIRST_X_TURNS, MIN_ZOOM, MAX_ZOOM, TURN_TIMER_INITIAL, TURN_TIMER_ADD, TURN_TIMER_WARNING, MOVE_COMBINE_ATTACK_ONCE_ONLY, FORTIFY_OVER_FIVE } from './initconfig';
 
 const PIECE_TYPES: Record<number, { name: string; move: number; rule: string }> = {
   1: { name: 'Scout', move: 4, rule: "Extends the frontline by 2 tiles instead of 1." },
   2: { name: 'Cavalry', move: 3, rule: "+1 Attack Power when attacking. Moves axially and diagonally with high mobility." },
   3: { name: 'Small Army', move: 3, rule: "Proficient in battlefied salvaging. Attacks in coordination with other allied armies during which fort tile penalties are applied only once and salvage is done independently." },
   4: { name: 'Big Army', move: 2, rule: "Proficient in battlefied salvaging. Attacks in coordination with other allied armies during which fort tile penalties are applied only once and salvage is done independently." },
-  5: { name: 'Encampment', move: 0, rule: "Places permanent fort tile upon creation. The fort tile imposes penalties onto attackers and units other than the king and scout on the fort tile may spend one action to use the move/attack/combine actions with a portion of their stack." },
+  5: { name: 'Encampment', move: 0, rule: "Can garrison additional troops. Places permanent fort tile upon creation. The fort tile imposes penalties onto attackers and units other than the king and scout on the fort tile may spend one action to use the move/attack/combine actions with a portion of their stack." },
   6: { name: 'King', move: 0, rule: "This piece starts on a fort tile. Move Speed is based on stack count. Inherits the coordinated strike and the cavalry movement and attack abilities at the appropriate stack counts." },
+};
+
+const getPieceInfo = (stack: { count: number, isKing?: boolean }) => {
+  if (stack.isKing) {
+    const basePiece = PIECE_TYPES[stack.count] || PIECE_TYPES[1];
+    return {
+      name: PIECE_TYPES[6].name,
+      rule: PIECE_TYPES[6].rule,
+      move: stack.count === 1 ? PIECE_TYPES[2].move : basePiece.move,
+    };
+  }
+  const count = stack.count >= 5 ? 5 : stack.count;
+  return PIECE_TYPES[count] || PIECE_TYPES[1];
 };
 
 type Player = 1 | 2;
@@ -201,7 +214,7 @@ const getReachableHexes = (start: {q: number, r: number}, moveSpeed: number, gri
       const stack = grid.get(key);
       if (!stack) {
         reachableEmpty.add(key);
-      } else if (stack.owner === player && stack.count < 5 && !stack.isKing) {
+      } else if (stack.owner === player && (FORTIFY_OVER_FIVE || stack.count < 5) && !stack.isKing) {
         reachableAllies.add(key);
       }
     }
@@ -220,7 +233,7 @@ const getReachableHexes = (start: {q: number, r: number}, moveSpeed: number, gri
             queue.push({ ...neighbor, dist: current.dist + 1 });
           } else {
             visited.add(nKey);
-            if (nStack.owner === player && nStack.count < 5 && !nStack.isKing) {
+            if (nStack.owner === player && (FORTIFY_OVER_FIVE || nStack.count < 5) && !nStack.isKing) {
               reachableAllies.add(nKey);
             }
           }
@@ -331,6 +344,7 @@ type GameStateSnapshot = {
   minTotalUnits: Record<Player, number>;
   minReserves: Record<Player, number>;
   isDoomed: boolean;
+  offenseBlacklist: Set<string>;
 };
 
 export default function App() {
@@ -395,6 +409,16 @@ export default function App() {
   const [winMessage, setWinMessage] = useState<string | null>(null);
   const [castlePos, setCastlePos] = useState<{ p1: { q: number, r: number } | null, p2: { q: number, r: number } | null }>({ p1: null, p2: null });
   const [turnTimers, setTurnTimers] = useState<Record<Player, number>>({ 1: TURN_TIMER_INITIAL, 2: TURN_TIMER_INITIAL });
+  const [offenseBlacklist, setOffenseBlacklist] = useState(new Set());
+
+  const markAsOffended = useCallback((coordKey) => {
+    if (!MOVE_COMBINE_ATTACK_ONCE_ONLY) return;
+    setOffenseBlacklist(prev => new Set(prev).add(coordKey));
+  }, []);
+
+  const resetOffended = useCallback(() => {
+    setOffenseBlacklist(new Set());
+  }, []);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -505,6 +529,7 @@ export default function App() {
       setMinReserves({ 1: STARTING_RESERVES, 2: STARTING_RESERVES });
       setStallTimers({ 1: STALL_TIMER_DEFAULT, 2: STALL_TIMER_DEFAULT });
       setIsDoomed(false);
+      resetOffended();
 
       // Camera Centering
       const k1 = axialToPixel(0, BOARD_GAP / 2, HEX_SIZE);
@@ -822,17 +847,35 @@ export default function App() {
           }
 
           ctx.fillStyle = '#ffffff';
-          ctx.font = `bold ${s * 0.55}px sans-serif`;
+          ctx.font = `bold ${stack.isKing ? s * 0.45 : s * 0.55}px sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(stack.count.toString(), x, y);
+          const displayCount = FORTIFY_OVER_FIVE && !stack.isKing && stack.count > 5 ? 5 : stack.count;
+          ctx.fillText(stack.isKing ? `K-${stack.count}` : displayCount.toString(), x, y);
+
+          if (FORTIFY_OVER_FIVE && !stack.isKing && stack.count > 5) {
+            const overstackCount = stack.count - 5;
+            const smallRadius = s * 0.25;
+            const smallY = y + s * 0.45;
+            ctx.beginPath();
+            ctx.arc(x, smallY, smallRadius, 0, 2 * Math.PI);
+            ctx.fillStyle = '#1e293b'; // slate-800
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5 / camera.zoom;
+            ctx.stroke();
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.font = `bold ${s * 0.3}px sans-serif`;
+            ctx.fillText(overstackCount.toString(), x, smallY);
+          }
 
           if (camera.zoom >= 1.2) {
-            const piece = PIECE_TYPES[stack.count];
-            if (piece || stack.isKing) {
+            const piece = getPieceInfo(stack);
+            if (piece) {
               ctx.fillStyle = stack.isKing ? '#fbbf24' : '#cbd5e1';
               ctx.font = `600 ${s * 0.25}px sans-serif`;
-              ctx.fillText(stack.isKing ? PIECE_TYPES[6].name : piece?.name || '', x, y + s * 0.85);
+              ctx.fillText(piece.name, x, y + s * 0.85);
             }
           }
           
@@ -992,7 +1035,8 @@ export default function App() {
       stallTimers: { ...stallTimers },
       minTotalUnits: { ...minTotalUnits },
       minReserves: { ...minReserves },
-      isDoomed
+      isDoomed,
+      offenseBlacklist: new Set(offenseBlacklist)
     }]);
   };
 
@@ -1036,6 +1080,7 @@ export default function App() {
           setKingPos(prev => ({ ...prev, [movingStack.owner === 1 ? 'p1' : 'p2']: { q: rounded.q, r: rounded.r } }));
         }
         setGrid(newGrid);
+        markAsOffended(key);
         setAp(prev => prev - 1);
         setActionState('idle');
         setSelectedStack(null);
@@ -1057,7 +1102,7 @@ export default function App() {
         const targetStack = grid.get(key)!;
         
         const isKing = sourceStack.isKing || targetStack.isKing;
-        const maxCount = isKing ? 6 : 5;
+        const maxCount = isKing ? 6 : (FORTIFY_OVER_FIVE ? Infinity : 5);
         const newCount = sourceStack.count + targetStack.count;
         
         if (newCount > maxCount) {
@@ -1077,6 +1122,7 @@ export default function App() {
             setKingPos(prev => ({ ...prev, [sourceStack.owner === 1 ? 'p1' : 'p2']: { q: rounded.q, r: rounded.r } }));
           }
           setGrid(newGrid);
+          markAsOffended(key);
           if (newCount >= 5 || isKing) {
             const newTerrainGrid = new Map(terrainGrid);
             newTerrainGrid.set(key, { type: 'fort' });
@@ -1122,7 +1168,8 @@ export default function App() {
           const nKey = `${neighbor.q},${neighbor.r}`;
           const nStack = grid.get(nKey);
           if (nStack && nStack.owner === currentPlayer && (nStack.count === 3 || nStack.count === 4)) {
-            if (nKey !== `${selectedStack!.q},${selectedStack!.r}`) {
+            const isOffended = MOVE_COMBINE_ATTACK_ONCE_ONLY && offenseBlacklist.has(nKey);
+            if (nKey !== `${selectedStack!.q},${selectedStack!.r}` && !isOffended) {
               potential.add(nKey);
             }
           }
@@ -1501,6 +1548,7 @@ export default function App() {
           const [qStr, rStr] = defenderKey.split(',');
           setKingPos(prev => ({ ...prev, [attackerStack.owner === 1 ? 'p1' : 'p2']: { q: parseInt(qStr), r: parseInt(rStr) } }));
         }
+        markAsOffended(defenderKey);
       } else {
         const retreatKey = entryKey === defenderKey ? (splinter ? splinter.sourceKey : attackerKey) : entryKey;
         
@@ -1514,6 +1562,7 @@ export default function App() {
             setKingPos(prev => ({ ...prev, [attackerStack.owner === 1 ? 'p1' : 'p2']: { q: parseInt(qStr), r: parseInt(rStr) } }));
           }
         }
+        markAsOffended(retreatKey);
       }
     } else if (attackerStack.isKing) {
       setKingPos(prev => ({ ...prev, [attackerStack.owner === 1 ? 'p1' : 'p2']: null }));
@@ -1615,6 +1664,7 @@ export default function App() {
             const [qStr, rStr] = targetKey.split(',');
             setKingPos(prev => ({ ...prev, [pStack.owner === 1 ? 'p1' : 'p2']: { q: parseInt(qStr), r: parseInt(rStr) } }));
           }
+          markAsOffended(targetKey);
         } else if (pStack.isKing) {
           setKingPos(prev => ({ ...prev, [pStack.owner === 1 ? 'p1' : 'p2']: null }));
           if (defenderRemaining > 0) {
@@ -1625,6 +1675,7 @@ export default function App() {
       } else {
         if (p.remainingCount > 0) {
           newGrid.set(p.key, { ...pStack, count: p.remainingCount });
+          markAsOffended(p.key);
         } else {
           newGrid.delete(p.key);
           if (pStack.isKing) {
@@ -1660,6 +1711,7 @@ export default function App() {
     setMinTotalUnits(lastState.minTotalUnits);
     setMinReserves(lastState.minReserves);
     setIsDoomed(lastState.isDoomed);
+    setOffenseBlacklist(new Set(lastState.offenseBlacklist));
     setHistory(history.slice(0, -1));
     setSelectedStack(null);
     setActiveSplinter(null);
@@ -1748,6 +1800,7 @@ export default function App() {
     setTurnNumber((t) => t + 1);
     setAp(2);
     setHistory([]);
+    resetOffended();
     setSelectedStack(null);
     setActiveSplinter(null);
 
@@ -1824,19 +1877,19 @@ export default function App() {
         const stack = grid.get(key);
         if (!stack) return null;
 
-        const piece = PIECE_TYPES[stack.count] || PIECE_TYPES[1];
-        const moveSpeed = stack.isKing && stack.count === 1 ? PIECE_TYPES[2].move : piece.move;
+        const piece = getPieceInfo(stack);
+        const moveSpeed = piece.move;
         const isImmobile = moveSpeed === 0;
+        const isOffended = MOVE_COMBINE_ATTACK_ONCE_ONLY && offenseBlacklist.has(key);
 
-        const maxCount = stack.isKing ? 6 : 5;
-        const canFortify = !isImmobile && stack.count < maxCount && reserves[currentPlayer] > 0 && ap > 0 && !stack.isKing && currentFrontlineSet.has(key);
-        const canMove = !isImmobile && ap > 0;
-        const canCombine = !isImmobile && ap > 0 && !stack.isKing;
-        const canAttack = !isImmobile && ap > 0;
+        const maxCount = stack.isKing ? 6 : (FORTIFY_OVER_FIVE ? Infinity : 5);
+        const canFortify = stack.count < maxCount && reserves[currentPlayer] > 0 && ap > 0 && !stack.isKing && currentFrontlineSet.has(key);
+        const canMove = !isImmobile && ap > 0 && !isOffended;
+        const canCombine = !isImmobile && ap > 0 && !stack.isKing && !isOffended;
+        const canAttack = !isImmobile && ap > 0 && !isOffended;
         const isFort = terrainGrid.get(key)?.type === 'fort';
-        const canSplinter = stack.count > 1 && !stack.isKing && isFort;
-        const canCoordinatedStrikePlus = stack.isKing && stack.count < 5;
-        const canCoordinatedStrike = stack.count === 3 || stack.count === 4 || canCoordinatedStrikePlus;
+        const canSplinter = stack.count > 1 && !stack.isKing && isFort && !isOffended;
+        const canCoordinatedStrike = (stack.count === 3 || stack.count === 4) && !isOffended;
         const canSpecial = ap > 0 && (canCoordinatedStrike || canSplinter);
 
         const handleFortify = () => {
@@ -1879,6 +1932,7 @@ export default function App() {
               <>
                 {canCoordinatedStrike && (
                   <button 
+                    disabled={!canCoordinatedStrike}
                     onClick={() => {
                       // Highlight adjacent enemies
                       const enemies = new Set<string>();
@@ -1897,7 +1951,7 @@ export default function App() {
                         setActionState('idle');
                       }
                     }}
-                    className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 transition-colors"
+                    className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
                   >
                     Coordinated Strike
                   </button>
@@ -1905,20 +1959,23 @@ export default function App() {
                 {canSplinter && (
                   <>
                     <button 
+                      disabled={!canSplinter}
                       onClick={() => { setSplitAmount(1); setSplinterAction('move'); setActionState('splinter_select_amount'); }}
-                      className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 transition-colors"
+                      className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
                     >
                       Split & Move
                     </button>
                     <button 
+                      disabled={!canSplinter}
                       onClick={() => { setSplitAmount(1); setSplinterAction('combine'); setActionState('splinter_select_amount'); }}
-                      className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 transition-colors"
+                      className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
                     >
                       Split & Combine
                     </button>
                     <button 
+                      disabled={!canSplinter}
                       onClick={() => { setSplitAmount(1); setSplinterAction('attack'); setActionState('splinter_select_amount'); }}
-                      className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 transition-colors"
+                      className="px-3 py-2 text-sm text-slate-200 text-left rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
                     >
                       Split & Attack
                     </button>
@@ -1991,13 +2048,13 @@ export default function App() {
         <div className="absolute top-48 right-4 w-80 bg-slate-800/95 backdrop-blur border border-slate-700 rounded-xl shadow-2xl p-5 pointer-events-none transition-opacity z-10">
           {(() => {
             const stack = grid.get(`${hoveredHex.q},${hoveredHex.r}`)!;
-            const piece = PIECE_TYPES[stack.count] || PIECE_TYPES[1];
+            const piece = getPieceInfo(stack);
             return (
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
                     {stack.isKing ? <Crown size={18} className="text-amber-400" /> : <Info size={18} className="text-slate-400" />}
-                    {stack.isKing ? PIECE_TYPES[6].name : piece.name}
+                    {piece.name}
                   </h3>
                   <span className={`px-2 py-0.5 rounded text-xs font-bold ${stack.owner === 1 ? 'bg-blue-500/20 text-blue-300' : 'bg-red-500/20 text-red-300'}`}>
                     Player {stack.owner}
@@ -2005,15 +2062,15 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-2 text-slate-300 text-sm">
                   <span className="font-semibold text-slate-400">Move Speed:</span>
-                  <span className="bg-slate-700 px-2 py-0.5 rounded font-mono">{stack.isKing && stack.count === 1 ? PIECE_TYPES[2].move : piece.move}</span>
+                  <span className="bg-slate-700 px-2 py-0.5 rounded font-mono">{piece.move}</span>
                 </div>
                 <div className="text-sm text-slate-300 leading-relaxed bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
                   <span className="font-semibold text-slate-400 block mb-1">Special Rule:</span>
-                  {stack.isKing ? PIECE_TYPES[6].rule : piece.rule}
+                  {piece.rule}
                 </div>
                 <div className="text-xs text-slate-500 mt-1 flex justify-between items-center">
                   <span>Stack Count</span>
-                  <span className="font-mono bg-slate-800 px-2 py-1 rounded">{stack.count} / {stack.isKing ? 6 : 5}</span>
+                  <span className="font-mono bg-slate-800 px-2 py-1 rounded">{stack.count} / {stack.isKing ? 6 : (FORTIFY_OVER_FIVE ? '∞' : 5)}</span>
                 </div>
               </div>
             );
@@ -2030,8 +2087,8 @@ export default function App() {
         if (!attackerStack || !defenderStack) return null;
 
         const battleData = calculateBattlePower(attackerStack, defenderStack, hoveredHex, terrainGrid);
-        const attackerPieceName = attackerStack.isKing ? PIECE_TYPES[6].name : (PIECE_TYPES[attackerStack.count] || PIECE_TYPES[1]).name;
-        const defenderPieceName = defenderStack.isKing ? PIECE_TYPES[6].name : (PIECE_TYPES[defenderStack.count] || PIECE_TYPES[1]).name;
+        const attackerPieceName = getPieceInfo(attackerStack).name;
+        const defenderPieceName = getPieceInfo(defenderStack).name;
 
         return (
           <div 
@@ -2250,6 +2307,7 @@ export default function App() {
                       }
                       
                       setGrid(newGrid);
+                      markAsOffended(popupState.targetKey);
                       const newTerrainGrid = new Map(terrainGrid);
                       newTerrainGrid.set(popupState.targetKey, { type: 'fort' });
                       setTerrainGrid(newTerrainGrid);
@@ -2520,7 +2578,7 @@ export default function App() {
             <div className="flex flex-col gap-2">
               <div className="text-xs text-slate-400 font-semibold uppercase">Target</div>
               <div className="flex justify-between items-center bg-slate-800 p-2 rounded border border-slate-700">
-                <span className="text-slate-200">{targetStack.isKing ? PIECE_TYPES[6].name : PIECE_TYPES[targetStack.count]?.name || 'Unknown'}</span>
+                <span className="text-slate-200">{getPieceInfo(targetStack).name}</span>
                 <span className="text-red-400 font-mono font-bold">Count: {targetStack.count}</span>
               </div>
             </div>
@@ -2548,7 +2606,7 @@ export default function App() {
                       style={isPrimary ? { backgroundColor: 'rgba(128, 0, 0, 0.2)', borderColor: 'rgba(128, 0, 0, 0.5)' } : {}}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="text-slate-200">{stack.isKing ? PIECE_TYPES[6].name : PIECE_TYPES[stack.count]?.name || 'Unknown'}</span>
+                        <span className="text-slate-200">{getPieceInfo(stack).name}</span>
                         {isPrimary && <span className="text-[10px] bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded uppercase font-bold">Primary</span>}
                         {index === 0 && <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded uppercase font-bold">Breach</span>}
                       </div>
@@ -2678,7 +2736,7 @@ export default function App() {
         if (!stack) return null;
         
         const splinterStack = { ...stack, count: splitAmount };
-        const piece = PIECE_TYPES[splinterStack.count] || PIECE_TYPES[1];
+        const piece = getPieceInfo(splinterStack);
 
         return (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => { setActionState('idle'); setSplinterAction(null); }}>
@@ -2695,14 +2753,14 @@ export default function App() {
                 <input 
                   type="range" 
                   min="1" 
-                  max={stack.count - 1} 
+                  max={Math.min(stack.count - 1, 4)} 
                   value={splitAmount} 
                   onChange={(e) => setSplitAmount(parseInt(e.target.value, 10))}
                   className="w-full accent-blue-500"
                 />
                 <div className="flex justify-between text-xs text-slate-500">
                   <span>1</span>
-                  <span>{stack.count - 1}</span>
+                  <span>{Math.min(stack.count - 1, 4)}</span>
                 </div>
               </div>
 
@@ -2739,7 +2797,7 @@ export default function App() {
                     const tempGrid = new Map<string, Stack>(grid);
                     tempGrid.set(sourceKey, splinterStack);
                     
-                    const piece = PIECE_TYPES[splitAmount] || PIECE_TYPES[1];
+                    const piece = getPieceInfo({ count: splitAmount });
                     const moveSpeed = piece.move;
                     
                     const reachable = getReachableHexes(selectedStack, moveSpeed, tempGrid);
